@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -20,15 +21,41 @@ type Chunk struct {
 
 type ChunkType string
 
-//type Pixel struct {
-//	R uint
-//	G uint
-//	B uint
-//	A uint
-//}
-
 type Pixel interface {
 	pixel()
+}
+
+type PalettePixel struct {
+	Index uint
+}
+
+func (p *PalettePixel) pixel() {}
+
+type GreyscalePixel struct {
+	Value uint
+}
+
+func (p *GreyscalePixel) pixel() {}
+
+type TruecolorPixel struct {
+	Red   uint
+	Green uint
+	Blue  uint
+	Alpha uint
+}
+
+func (p *TruecolorPixel) pixel() {}
+
+type IHDRData struct {
+	Width           int
+	Height          int
+	BitDepth        uint8
+	ColorType       ColorType
+	InterlaceMethod InterlaceMethod
+}
+
+type PLTEData struct {
+	Entries []TruecolorPixel
 }
 
 type Png struct {
@@ -38,12 +65,14 @@ type Png struct {
 	BitDepth        uint8
 	InterlaceMethod InterlaceMethod
 
-	Pixels [][]Pixel
+	Pixels      [][]Pixel
+	PlteEntries []TruecolorPixel
 }
 
 const (
 	IHDR ChunkType = "IHDR"
 	IEND ChunkType = "IEND"
+	PLTE ChunkType = "PLTE"
 	IDAT ChunkType = "IDAT"
 )
 
@@ -74,32 +103,29 @@ const (
 	FilterTypePaeth
 )
 
-type Decoder struct {
-	data []byte
-}
-
 func DecodePng(data []byte) (*Png, error) {
-	decoder := Decoder{data: data}
-
-	err := decoder.readSig()
+	read, err := readSig(data)
 	if err != nil {
 		return nil, err
 	}
+	data = data[read:]
 
 	chunks := make([]*Chunk, 0)
 
-	for len(decoder.data) > 0 {
-		chunk, err := decoder.readChunk()
+	for len(data) > 0 {
+		chunk, read, err := readChunk(data)
 		if err != nil {
 			return nil, err
 		}
+		data = data[read:]
 		chunks = append(chunks, chunk)
 	}
 
 	png := &Png{}
 
-	var IHDRData IHDRData
-	IDATData := make([]byte, 0)
+	var ihdrData IHDRData
+	var plteData PLTEData
+	idatData := make([]byte, 0)
 	for index, chunk := range chunks {
 		if index == 0 && chunk.chunkType != IHDR {
 			return nil, fmt.Errorf("first chunk should be IHDR, found: %s", chunk.chunkType)
@@ -108,18 +134,21 @@ func DecodePng(data []byte) (*Png, error) {
 			if chunk.chunkType != IEND {
 				return nil, fmt.Errorf("last chunk should be IEND, found: %s", chunk.chunkType)
 			}
-			// todo: implement
-			if !true {
+			if len(idatData) == 0 {
 				return nil, fmt.Errorf("there should be atleast one IDAT chunk")
 			}
+			if ihdrData.ColorType == ColorTypePalette && len(plteData.Entries) == 0 {
+				return nil, fmt.Errorf("palette color type missing PLTR chunk")
+			}
 
-			uncompressedIDATData := uncompressIDATData(IDATData)
-			pixels, err := processIDATData(uncompressedIDATData, IHDRData)
+			uncompressedIdatData := uncompressIDATData(idatData)
+			pixels, err := processIDATData(uncompressedIdatData, ihdrData)
 			if err != nil {
 				return nil, err
 			}
 
 			png.Pixels = pixels
+			png.PlteEntries = plteData.Entries
 		}
 
 		switch chunk.chunkType {
@@ -133,9 +162,15 @@ func DecodePng(data []byte) (*Png, error) {
 			png.ColorType = res.ColorType
 			png.BitDepth = res.BitDepth
 			png.InterlaceMethod = res.InterlaceMethod
-			IHDRData = res
+			ihdrData = res
+		case PLTE:
+			res, err := decodePLTEChunk(ihdrData, chunk.data)
+			if err != nil {
+				return nil, err
+			}
+			plteData = res
 		case IDAT:
-			IDATData = append(IDATData, chunk.data...)
+			idatData = append(idatData, chunk.data...)
 		}
 	}
 
@@ -166,8 +201,7 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	case ColorTypeTruecolor:
 		pixelNumChannels = 3
 	case ColorTypePalette:
-		// todo: implement
-
+		pixelNumChannels = 1
 	case ColorTypeGrayscaleAlpha:
 		pixelNumChannels = 2
 	case ColorTypeTruecolorAlpha:
@@ -257,10 +291,28 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 					}
 				}
 			case ColorTypePalette:
-				// todo: implement
-				panic("implement")
+				var value uint
+				if pixelBitSize < 8 {
+					// in pixels smaller than a byte, this is used to place the mask correctly within the byte to get the correct pixel
+					// so if pixelBitSize == 2, we want a mask of 0b11000000, for the first pixel in the byte, 0b00110000 for the second, etc..
+					pixelsPerByte := 8 / pixelBitSize
+					// pixelsperbyte == 8 && x == 0, shiftMaskBy = 7 0b1000 0000
+					// pixelsperbyte == 8 && x == 1, shiftMaskBy = 6 0b0100 0000
+					// pixelsperbyte == 4 && x == 0, shiftMaskBy = 6 0b1100 0000
+					// pixelsperbyte == 4 && x == 2, shiftMaskBy = 2 0b0000 1100
+					// pixelsperbyte == 4 && x == 3, shiftMaskBy = 0 0b0000 0011
+					// pixelsperbyte == 2 && x == 0, shiftMaskBy = 4 0b1111 0000
+					// pixelsperbyte == 2 && x == 1, shiftMaskBy = 0 0b1111 0000
+					shiftMaskBy := (8 / pixelsPerByte) * (pixelsPerByte - 1 - x)
+					mask := uint((1<<pixelBitSize)-1) << shiftMaskBy
+					value = smallPixelData & uint(mask)
+				} else {
+					value = uint(data[0])
+				}
+				pixel = &PalettePixel{
+					Index: value,
+				}
 			case ColorTypeGrayscaleAlpha:
-				pixelNumChannels = 2
 			case ColorTypeTruecolorAlpha:
 				switch header.BitDepth {
 				case 8:
@@ -359,7 +411,7 @@ func unfilterScanline(
 				priorXminusBpp = uint(previousScanlineData[i-pixelByteSize])
 			}
 
-			predictor := PaethPredictor(int(rawXminusBpp), int(priorX), int(priorXminusBpp))
+			predictor := paethPredictor(int(rawXminusBpp), int(priorX), int(priorXminusBpp))
 			rawX := (paethX + uint(predictor)) % 256
 
 			result[i] = byte(rawX)
@@ -371,12 +423,12 @@ func unfilterScanline(
 	return result, nil
 }
 
-func PaethPredictor(a int, b int, c int) int {
+func paethPredictor(a int, b int, c int) int {
 	// a = left, b = above, c = upper left
 	p := a + b - c      // initial estimate
-	pa := AbsInt(p - a) // distances to a, b, c
-	pb := AbsInt(p - b)
-	pc := AbsInt(p - c)
+	pa := absInt(p - a) // distances to a, b, c
+	pb := absInt(p - b)
+	pc := absInt(p - c)
 	// return nearest of a,b,c,
 	// breaking ties in order a,b,c.
 	if pa <= pb && pa <= pc {
@@ -388,40 +440,11 @@ func PaethPredictor(a int, b int, c int) int {
 	}
 }
 
-func AbsInt(a int) int {
+func absInt(a int) int {
 	if a < 0 {
 		return -a
 	}
 	return a
-}
-
-type PalettePixel struct {
-	index uint
-}
-
-func (p *PalettePixel) pixel() {}
-
-type GreyscalePixel struct {
-	Value uint
-}
-
-func (p *GreyscalePixel) pixel() {}
-
-type TruecolorPixel struct {
-	Red   uint
-	Green uint
-	Blue  uint
-	Alpha uint
-}
-
-func (p *TruecolorPixel) pixel() {}
-
-type IHDRData struct {
-	Width           int
-	Height          int
-	BitDepth        uint8
-	ColorType       ColorType
-	InterlaceMethod InterlaceMethod
 }
 
 func decodeIHDRChunk(data []byte) (IHDRData, error) {
@@ -485,19 +508,45 @@ func decodeIHDRChunk(data []byte) (IHDRData, error) {
 	return res, nil
 }
 
-func (d *Decoder) readSig() error {
-	sig := d.data[:8]
-	d.data = d.data[8:]
+func decodePLTEChunk(ihdrData IHDRData, data []byte) (PLTEData, error) {
+	res := PLTEData{}
 
-	if binary.BigEndian.Uint64(sig) != FILE_SIGN {
-		return fmt.Errorf("invalid PNG signature")
+	if len(data)%3 != 0 {
+		return res, errors.New("invalid PLTE chunk data, not divisible by 3")
+	}
+	if len(data)/3 > 1<<ihdrData.BitDepth {
+		return res, fmt.Errorf("invalid PLTE chunk data, max samples: %d found: %d samples", 1<<ihdrData.BitDepth, len(data)/3)
 	}
 
-	return nil
+	entries := make([]TruecolorPixel, 0)
+	for len(data) > 0 {
+		pixel := TruecolorPixel{
+			Red:   uint(data[0]),
+			Green: uint(data[1]),
+			Blue:  uint(data[2]),
+			Alpha: 0xFF,
+		}
+		entries = append(entries, pixel)
+		data = data[3:]
+	}
+
+	res.Entries = entries
+
+	return res, nil
 }
 
-func (d *Decoder) readChunk() (*Chunk, error) {
-	newData := d.data
+func readSig(data []byte) (int, error) {
+	sig := data[:8]
+
+	if binary.BigEndian.Uint64(sig) != FILE_SIGN {
+		return -1, fmt.Errorf("invalid PNG signature")
+	}
+
+	return 8, nil
+}
+
+func readChunk(data []byte) (*Chunk, int, error) {
+	newData := data
 	length := binary.BigEndian.Uint32(newData[:4])
 	newData = newData[4:]
 
@@ -510,15 +559,13 @@ func (d *Decoder) readChunk() (*Chunk, error) {
 	expectedChecksum := binary.BigEndian.Uint32(newData[:4])
 	newData = newData[4:]
 
-	actualChecksum := crc32.ChecksumIEEE(d.data[4 : 8+length])
+	actualChecksum := crc32.ChecksumIEEE(data[4 : 8+length])
 	if expectedChecksum != actualChecksum {
-		return nil, fmt.Errorf("checksum mismatch, expected %d, got: %d", expectedChecksum, actualChecksum)
+		return nil, -1, fmt.Errorf("checksum mismatch, expected %d, got: %d", expectedChecksum, actualChecksum)
 	}
-
-	d.data = newData
 
 	return &Chunk{
 		chunkType: chunkType,
 		data:      chunkData,
-	}, nil
+	}, len(data) - len(newData), nil
 }
