@@ -63,12 +63,14 @@ func TestFirstChunkIsIHDR(t *testing.T) {
 }
 
 func TestDecodeChunkWithRealIHDR(t *testing.T) {
-	decoder := Decoder{data: REAL_IHDR_CHUNK}
-	chunk, err := decoder.readChunk()
+	chunk, read, err := readChunk(REAL_IHDR_CHUNK)
 	if err != nil {
 		t.Fatalf("Expected no error, but got: %v", err)
 	}
 	if chunk.chunkType != IHDR {
 		t.Fatalf("Expected chunk type IHDR, but got: %s", chunk.chunkType)
+	}
+	if read != len(REAL_IHDR_CHUNK) {
+		t.Fatalf("Expected read count to be %d, but got: %d", len(REAL_IHDR_CHUNK), read)
 	}
 }

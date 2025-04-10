@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"math"
+	"runtime"
+	"slices"
 )
 
 const FILE_SIGN = 0x89504E470D0A1A0A
@@ -96,8 +98,14 @@ const (
 type FilterType int
 
 type Scanline struct {
-	index int
-	data  []byte
+	index      int
+	unfData    []byte
+	data       []byte
+	filterType FilterType
+}
+
+func (sl Scanline) unfilteringRequiresPrevScanline() bool {
+	return sl.filterType >= 2
 }
 
 const (
@@ -251,7 +259,6 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	scanlineBitPadding := scanlineBitSize % 8
 	scanlineByteSize := (scanlineBitSize + scanlineBitPadding) / 8
 
-	currScanline := 0
 	// todo: we also need to break/continue on:
 	//      Scanlines always begin on byte boundaries.  When pixels have fewer
 	//      than 8 bits and the scanline width is not evenly divisible by the
@@ -259,49 +266,167 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	//      each scanline are wasted.  The contents of these wasted bits are
 	//      unspecified.
 
-	previousScanlineData := make([]byte, scanlineByteSize)
-	for ; currScanline < header.Height && len(idatData) >= scanlineByteSize+1; currScanline++ {
-		// also strips filter type byte
-		data, err := unfilterScanline(
-			previousScanlineData,
-			idatData[:scanlineByteSize+1],
-			scanlineByteSize,
-			pixelByteSize,
-		)
-		if err != nil {
-			return nil, err
-		}
-		previousScanlineData = data
-		idatData = idatData[scanlineByteSize+1:]
+	scanlineCount := header.Height
+	minScanlinesPerWorker := 100
+	optimalNumWorkers := (scanlineCount / minScanlinesPerWorker) + 1
+	numWorkers := minInt(runtime.NumCPU(), optimalNumWorkers)
+	scanlinesPerWorker := scanlineCount / numWorkers
 
-		scanline, err := processScanline(
+	scanlines := make([]*Scanline, 0)
+	for i := 0; i < scanlineCount; i++ {
+		slLen := scanlineByteSize + 1
+		start := slLen * i
+		end := start + slLen
+		if end > len(idatData) {
+			return nil, fmt.Errorf("couldn't parse IDAT idatData, not enough idatData to read all scanlines, expected: %d scanlines, got: %d", header.Height, i)
+		}
+		if i == scanlineCount-1 && len(idatData[end:]) > 0 {
+			return nil, fmt.Errorf("there was idatData left in the IDAT chunks after reading all scanlines, remaining idatData: %v", idatData)
+		}
+		unpData := idatData[start:end]
+		filterType := FilterType(unpData[0])
+		scanline := &Scanline{
+			index:      i,
+			unfData:    unpData[1:],
+			filterType: filterType,
+		}
+		scanlines = append(scanlines, scanline)
+	}
+
+	results := make(chan Result, numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		start := scanlinesPerWorker * i
+		end := start + scanlinesPerWorker
+		if i == numWorkers-1 {
+			end = scanlineCount
+		}
+		work := scanlines[start:end]
+		go worker(
 			header,
-			data[:scanlineByteSize],
+			work,
+			scanlineByteSize,
+			pixelBitSize,
+			pixelByteSize,
+			results,
+		)
+	}
+
+	unprocessedScanlinesIndices := make([]int, 0)
+
+	for i := 0; i < numWorkers; i++ {
+		result := <-results
+		if result.err != nil {
+			return nil, result.err
+		}
+		unprocessedScanlinesIndices = append(unprocessedScanlinesIndices, result.unprocessedIndices...)
+		for _, sl := range result.scanlines {
+			pixels[sl.index] = sl.pixels
+		}
+
+		if i == numWorkers-1 {
+			close(results)
+		}
+	}
+
+	slices.Sort(unprocessedScanlinesIndices)
+
+	for _, index := range unprocessedScanlinesIndices {
+		sl := scanlines[index]
+
+		res, err := processScanline(
+			header,
+			scanlines[index-1],
+			sl,
+			scanlineByteSize,
 			pixelBitSize,
 			pixelByteSize,
 		)
+
 		if err != nil {
 			return nil, err
 		}
-		pixels[currScanline] = scanline
-	}
 
-	if currScanline < header.Height {
-		return nil, fmt.Errorf("couldn't parse IDAT idatData, not enough idatData to read all scanlines, expected: %d scanlines, got: %d", header.Height, currScanline)
-	}
-	if len(idatData) != 0 {
-		return nil, fmt.Errorf("there was idatData left in the IDAT chunks after reading all scanlines, remaining idatData: %v", idatData)
+		pixels[index] = res
 	}
 
 	return pixels, nil
 }
 
+type ScanlineResult struct {
+	index  int
+	pixels []Pixel
+}
+
+type Result struct {
+	unprocessedIndices []int
+	scanlines          []ScanlineResult
+	err                error
+}
+
+func worker(
+	header IHDRData,
+	scanlines []*Scanline,
+	scanlineByteSize int,
+	pixelBitSize int,
+	pixelByteSize int,
+	results chan<- Result,
+) {
+	result := Result{}
+	for i, sl := range scanlines {
+		var prevScanline *Scanline
+		if sl.unfilteringRequiresPrevScanline() {
+			if sl.index == 0 {
+				prevScanline = &Scanline{data: make([]byte, scanlineByteSize)}
+			} else if i == 0 || len(scanlines[i-1].data) == 0 {
+				result.unprocessedIndices = append(result.unprocessedIndices, sl.index)
+				continue
+			} else {
+				prevScanline = scanlines[i-1]
+			}
+		}
+
+		pixels, err := processScanline(
+			header,
+			prevScanline,
+			sl,
+			scanlineByteSize,
+			pixelBitSize,
+			pixelByteSize,
+		)
+
+		if err != nil {
+			result.err = err
+			results <- result
+			return
+		}
+
+		scanlineResult := ScanlineResult{index: sl.index, pixels: pixels}
+		result.scanlines = append(result.scanlines, scanlineResult)
+	}
+	results <- result
+}
+
 func processScanline(
 	header IHDRData,
-	data []byte,
+	prevScanline *Scanline,
+	scanline *Scanline,
+	scanlineByteSize int,
 	pixelBitSize int,
 	pixelByteSize int,
 ) ([]Pixel, error) {
+	// also strips filter type byte
+	err := unfilterScanline(
+		prevScanline,
+		scanline,
+		scanlineByteSize,
+		pixelByteSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	data := scanline.data
+
 	pixels := make([]Pixel, header.Width)
 	for x := 0; x < header.Width; x++ {
 		var smallPixelData uint
@@ -411,25 +536,23 @@ func processScanline(
 }
 
 func unfilterScanline(
-	previousScanlineData []byte,
-	data []byte,
+	previousScanline *Scanline,
+	scanline *Scanline,
 	scanlineByteSize int,
 	pixelByteSize int,
-) ([]byte, error) {
+) error {
 	if pixelByteSize == 0 {
 		pixelByteSize = 1
 	}
 
-	filterType := FilterType(data[0])
-	data = data[1:]
 	result := make([]byte, scanlineByteSize)
 
-	switch filterType {
+	switch scanline.filterType {
 	case FilterTypeNone:
-		return data, nil
+		scanline.data = scanline.unfData
 	case FilterTypeSub:
 		for i := 0; i < scanlineByteSize; i++ {
-			subX := uint(data[i])
+			subX := uint(scanline.unfData[i])
 			rawXminusBpp := uint(0)
 			if i-pixelByteSize >= 0 {
 				rawXminusBpp = uint(result[i-pixelByteSize])
@@ -438,33 +561,42 @@ func unfilterScanline(
 			result[i] = byte(rawX)
 		}
 	case FilterTypeUp:
+		if len(previousScanline.data) == 0 {
+			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
+		}
 		for i := 0; i < scanlineByteSize; i++ {
-			upX := uint(data[i])
-			priorX := uint(previousScanlineData[i])
+			upX := uint(scanline.unfData[i])
+			priorX := uint(previousScanline.data[i])
 			rawX := (upX + priorX) % 256
 			result[i] = byte(rawX)
 		}
 	case FilterTypeAverage:
+		if len(previousScanline.data) == 0 {
+			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
+		}
 		for i := 0; i < scanlineByteSize; i++ {
 			//Average(x) + floor((Raw(x-bpp)+Prior(x))/2)
-			avgX := uint(data[i])
+			avgX := uint(scanline.unfData[i])
 			rawXminusBpp := uint(0)
 			if i-pixelByteSize >= 0 {
 				rawXminusBpp = uint(result[i-pixelByteSize])
 			}
-			priorX := uint(previousScanlineData[i])
+			priorX := uint(previousScanline.data[i])
 			rawX := (avgX + uint(math.Floor(float64(rawXminusBpp+priorX)/2))) % 256
 			result[i] = byte(rawX)
 		}
 	case FilterTypePaeth:
+		if len(previousScanline.data) == 0 {
+			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
+		}
 		for i := 0; i < scanlineByteSize; i++ {
-			paethX := uint(data[i])
+			paethX := uint(scanline.unfData[i])
 			rawXminusBpp := uint(0)
-			priorX := previousScanlineData[i]
+			priorX := previousScanline.data[i]
 			priorXminusBpp := uint(0)
 			if i-pixelByteSize >= 0 {
 				rawXminusBpp = uint(result[i-pixelByteSize])
-				priorXminusBpp = uint(previousScanlineData[i-pixelByteSize])
+				priorXminusBpp = uint(previousScanline.data[i-pixelByteSize])
 			}
 
 			predictor := paethPredictor(int(rawXminusBpp), int(priorX), int(priorXminusBpp))
@@ -473,10 +605,12 @@ func unfilterScanline(
 			result[i] = byte(rawX)
 		}
 	default:
-		return nil, fmt.Errorf("unknown filter type %v", filterType)
+		return fmt.Errorf("unknown filter type %v", scanline.filterType)
 	}
 
-	return result, nil
+	scanline.data = result
+
+	return nil
 }
 
 func paethPredictor(a int, b int, c int) int {
@@ -501,6 +635,13 @@ func absInt(a int) int {
 		return -a
 	}
 	return a
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func decodeIHDRChunk(data []byte) (IHDRData, error) {

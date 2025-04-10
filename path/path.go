@@ -1,7 +1,6 @@
 package path
 
 import (
-	"fmt"
 	"math"
 	"slices"
 )
@@ -165,29 +164,6 @@ func UpdateOrder1(slice []*DNode, el *DNode) []*DNode {
 	return InsertOrdered1(slice, el)
 }
 
-func Dijkstra(maze [][]bool, startX, startY, endX, endY int) {
-	tree := makeTreeFromMaze(maze, startX, startY)
-	fmt.Printf("%+v", tree)
-
-	stack := make([]DijkstraNode, 0)
-	stack = append(stack, DijkstraNode{Node: tree, distance: -1, pathVia: nil})
-
-	for {
-		top := stack[len(stack)-1]
-		if top.x == endX && top.y == endY {
-			// todo
-			break
-		}
-
-		for _, child := range top.children {
-			dist := AbsInt(child.x-top.x) + AbsInt(child.y-top.y)
-
-			newNode := DijkstraNode{Node: child, distance: dist, pathVia: top.Node}
-			stack = InsertOrdered(stack, newNode)
-		}
-	}
-}
-
 type Node2 struct {
 	X, Y int
 }
@@ -199,7 +175,15 @@ type DNode struct {
 	distanceRemaining float64
 }
 
-func DijkstraOrAStar(astar bool, maze [][]bool, startX, startY, endX, endY int) []Node2 {
+func Dijkstra(maze [][]bool, startX, startY, endX, endY int) []Node2 {
+	return dijkstraOrAStar(false, maze, startX, startY, endX, endY)
+}
+
+func Astart(maze [][]bool, startX, startY, endX, endY int) []Node2 {
+	return dijkstraOrAStar(true, maze, startX, startY, endX, endY)
+}
+
+func dijkstraOrAStar(astar bool, maze [][]bool, startX, startY, endX, endY int) []Node2 {
 	nodes := make([][]*DNode, len(maze))
 	for y := range nodes {
 		nodes[y] = make([]*DNode, len(maze[y]))
@@ -265,10 +249,6 @@ func DijkstraOrAStar(astar bool, maze [][]bool, startX, startY, endX, endY int) 
 
 		finished = append(finished, top)
 	}
-}
-
-func lkajsdf(node *Node) {
-
 }
 
 func AbsInt(a int) int {
