@@ -95,6 +95,11 @@ const (
 
 type FilterType int
 
+type Scanline struct {
+	index int
+	data  []byte
+}
+
 const (
 	FilterTypeNone FilterType = iota
 	FilterTypeSub
@@ -191,6 +196,38 @@ func uncompressIDATData(data []byte) []byte {
 	return out.Bytes()
 }
 
+func (h IHDRData) pixelNumChannels() int {
+	pixelNumChannels := 0
+	switch h.ColorType {
+	case ColorTypeGrayscale:
+		pixelNumChannels = 1
+	case ColorTypeTruecolor:
+		pixelNumChannels = 3
+	case ColorTypePalette:
+		pixelNumChannels = 1
+	case ColorTypeGrayscaleAlpha:
+		pixelNumChannels = 2
+	case ColorTypeTruecolorAlpha:
+		pixelNumChannels = 4
+	}
+	return pixelNumChannels
+}
+func (h IHDRData) pixelBitSize() int {
+	return h.pixelNumChannels() * int(h.BitDepth)
+}
+func (h IHDRData) pixelByteSize() int {
+	return h.pixelBitSize() / 8
+}
+func (h IHDRData) scanlineBitSize() int {
+	return h.pixelBitSize() * h.Width
+}
+func (h IHDRData) scanlineBitPadding() int {
+	return h.scanlineBitSize() % 8
+}
+func (h IHDRData) scanlineByteSize() int {
+	return (h.scanlineBitSize() + h.scanlineBitPadding()) / 8
+}
+
 func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	pixels := make([][]Pixel, header.Height)
 
@@ -237,111 +274,16 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 		previousScanlineData = data
 		idatData = idatData[scanlineByteSize+1:]
 
-		pixels[currScanline] = make([]Pixel, header.Width)
-
-		for x := 0; x < header.Width; x++ {
-			var smallPixelData uint
-			if pixelBitSize < 8 {
-				currDataByteIndex := (x * pixelBitSize) / 8
-				smallPixelData = uint(data[currDataByteIndex])
-			}
-
-			var pixel Pixel
-			switch header.ColorType {
-			case ColorTypeGrayscale:
-				var value uint
-				switch pixelByteSize {
-				case 0:
-					// in pixels smaller than a byte, this is used to place the mask correctly within the byte to get the correct pixel
-					// so if pixelBitSize == 2, we want a mask of 0b11000000, for the first pixel in the byte, 0b00110000 for the second, etc..
-					pixelsPerByte := 8 / pixelBitSize
-					// pixelsperbyte == 8 && x == 0, shiftMaskBy = 7 0b1000 0000
-					// pixelsperbyte == 8 && x == 1, shiftMaskBy = 6 0b0100 0000
-					// pixelsperbyte == 4 && x == 0, shiftMaskBy = 6 0b1100 0000
-					// pixelsperbyte == 4 && x == 2, shiftMaskBy = 2 0b0000 1100
-					// pixelsperbyte == 4 && x == 3, shiftMaskBy = 0 0b0000 0011
-					// pixelsperbyte == 2 && x == 0, shiftMaskBy = 4 0b1111 0000
-					// pixelsperbyte == 2 && x == 1, shiftMaskBy = 0 0b1111 0000
-					shiftMaskBy := (8 / pixelsPerByte) * (pixelsPerByte - 1 - x)
-					mask := uint((1<<pixelBitSize)-1) << shiftMaskBy
-					value = smallPixelData & uint(mask)
-				case 1:
-					value = uint(data[0])
-				case 2:
-					value = uint(binary.BigEndian.Uint16(data))
-				}
-				pixel = &GreyscalePixel{
-					Value: value,
-				}
-			case ColorTypeTruecolor:
-				switch header.BitDepth {
-				case 8:
-					pixel = &TruecolorPixel{
-						Red:   uint(data[0]),
-						Green: uint(data[1]),
-						Blue:  uint(data[2]),
-						Alpha: math.MaxUint,
-					}
-				case 16:
-					pixel = &TruecolorPixel{
-						Red:   uint(binary.BigEndian.Uint16(data)),
-						Green: uint(binary.BigEndian.Uint16(data[2:])),
-						Blue:  uint(binary.BigEndian.Uint16(data[4:])),
-						Alpha: math.MaxUint,
-					}
-				}
-			case ColorTypePalette:
-				var value uint
-				if pixelBitSize < 8 {
-					// in pixels smaller than a byte, this is used to place the mask correctly within the byte to get the correct pixel
-					// so if pixelBitSize == 2, we want a mask of 0b11000000, for the first pixel in the byte, 0b00110000 for the second, etc..
-					pixelsPerByte := 8 / pixelBitSize
-					// pixelsperbyte == 8 && x == 0, shiftMaskBy = 7 0b1000 0000
-					// pixelsperbyte == 8 && x == 1, shiftMaskBy = 6 0b0100 0000
-					// pixelsperbyte == 4 && x == 0, shiftMaskBy = 6 0b1100 0000
-					// pixelsperbyte == 4 && x == 2, shiftMaskBy = 2 0b0000 1100
-					// pixelsperbyte == 4 && x == 3, shiftMaskBy = 0 0b0000 0011
-					// pixelsperbyte == 2 && x == 0, shiftMaskBy = 4 0b1111 0000
-					// pixelsperbyte == 2 && x == 1, shiftMaskBy = 0 0b1111 0000
-					shiftMaskBy := (8 / pixelsPerByte) * (pixelsPerByte - 1 - x)
-					mask := uint((1<<pixelBitSize)-1) << shiftMaskBy
-					value = smallPixelData & uint(mask)
-				} else {
-					value = uint(data[0])
-				}
-				pixel = &PalettePixel{
-					Index: value,
-				}
-			case ColorTypeGrayscaleAlpha:
-			case ColorTypeTruecolorAlpha:
-				switch header.BitDepth {
-				case 8:
-					pixel = &TruecolorPixel{
-						Red:   uint(data[0]),
-						Green: uint(data[1]),
-						Blue:  uint(data[2]),
-						Alpha: uint(data[3]),
-					}
-				case 16:
-					pixel = &TruecolorPixel{
-						Red:   uint(binary.BigEndian.Uint16(data)),
-						Green: uint(binary.BigEndian.Uint16(data[2:])),
-						Blue:  uint(binary.BigEndian.Uint16(data[4:])),
-						Alpha: uint(binary.BigEndian.Uint16(data[6:])),
-					}
-				}
-			}
-
-			if pixelBitSize < 8 {
-				pixelsPerByte := 8 / pixelBitSize
-				if x%pixelsPerByte == pixelsPerByte-1 {
-					data = data[1:]
-				}
-			} else {
-				data = data[pixelByteSize:]
-			}
-			pixels[currScanline][x] = pixel
+		scanline, err := processScanline(
+			header,
+			data[:scanlineByteSize],
+			pixelBitSize,
+			pixelByteSize,
+		)
+		if err != nil {
+			return nil, err
 		}
+		pixels[currScanline] = scanline
 	}
 
 	if currScanline < header.Height {
@@ -349,6 +291,120 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	}
 	if len(idatData) != 0 {
 		return nil, fmt.Errorf("there was idatData left in the IDAT chunks after reading all scanlines, remaining idatData: %v", idatData)
+	}
+
+	return pixels, nil
+}
+
+func processScanline(
+	header IHDRData,
+	data []byte,
+	pixelBitSize int,
+	pixelByteSize int,
+) ([]Pixel, error) {
+	pixels := make([]Pixel, header.Width)
+	for x := 0; x < header.Width; x++ {
+		var smallPixelData uint
+		if pixelBitSize < 8 {
+			currDataByteIndex := (x * pixelBitSize) / 8
+			smallPixelData = uint(data[currDataByteIndex])
+		}
+
+		var pixel Pixel
+		switch header.ColorType {
+		case ColorTypeGrayscale:
+			var value uint
+			switch pixelByteSize {
+			case 0:
+				// in pixels smaller than a byte, this is used to place the mask correctly within the byte to get the correct pixel
+				// so if pixelBitSize == 2, we want a mask of 0b11000000, for the first pixel in the byte, 0b00110000 for the second, etc..
+				pixelsPerByte := 8 / pixelBitSize
+				// pixelsperbyte == 8 && x == 0, shiftMaskBy = 7 0b1000 0000
+				// pixelsperbyte == 8 && x == 1, shiftMaskBy = 6 0b0100 0000
+				// pixelsperbyte == 4 && x == 0, shiftMaskBy = 6 0b1100 0000
+				// pixelsperbyte == 4 && x == 2, shiftMaskBy = 2 0b0000 1100
+				// pixelsperbyte == 4 && x == 3, shiftMaskBy = 0 0b0000 0011
+				// pixelsperbyte == 2 && x == 0, shiftMaskBy = 4 0b1111 0000
+				// pixelsperbyte == 2 && x == 1, shiftMaskBy = 0 0b1111 0000
+				shiftMaskBy := (8 / pixelsPerByte) * (pixelsPerByte - 1 - x)
+				mask := uint((1<<pixelBitSize)-1) << shiftMaskBy
+				value = smallPixelData & uint(mask)
+			case 1:
+				value = uint(data[0])
+			case 2:
+				value = uint(binary.BigEndian.Uint16(data))
+			}
+			pixel = &GreyscalePixel{
+				Value: value,
+			}
+		case ColorTypeTruecolor:
+			switch header.BitDepth {
+			case 8:
+				pixel = &TruecolorPixel{
+					Red:   uint(data[0]),
+					Green: uint(data[1]),
+					Blue:  uint(data[2]),
+					Alpha: math.MaxUint,
+				}
+			case 16:
+				pixel = &TruecolorPixel{
+					Red:   uint(binary.BigEndian.Uint16(data)),
+					Green: uint(binary.BigEndian.Uint16(data[2:])),
+					Blue:  uint(binary.BigEndian.Uint16(data[4:])),
+					Alpha: math.MaxUint,
+				}
+			}
+		case ColorTypePalette:
+			var value uint
+			if pixelBitSize < 8 {
+				// in pixels smaller than a byte, this is used to place the mask correctly within the byte to get the correct pixel
+				// so if pixelBitSize == 2, we want a mask of 0b11000000, for the first pixel in the byte, 0b00110000 for the second, etc..
+				pixelsPerByte := 8 / pixelBitSize
+				// pixelsperbyte == 8 && x == 0, shiftMaskBy = 7 0b1000 0000
+				// pixelsperbyte == 8 && x == 1, shiftMaskBy = 6 0b0100 0000
+				// pixelsperbyte == 4 && x == 0, shiftMaskBy = 6 0b1100 0000
+				// pixelsperbyte == 4 && x == 2, shiftMaskBy = 2 0b0000 1100
+				// pixelsperbyte == 4 && x == 3, shiftMaskBy = 0 0b0000 0011
+				// pixelsperbyte == 2 && x == 0, shiftMaskBy = 4 0b1111 0000
+				// pixelsperbyte == 2 && x == 1, shiftMaskBy = 0 0b1111 0000
+				shiftMaskBy := (8 / pixelsPerByte) * (pixelsPerByte - 1 - x)
+				mask := uint((1<<pixelBitSize)-1) << shiftMaskBy
+				value = smallPixelData & uint(mask)
+			} else {
+				value = uint(data[0])
+			}
+			pixel = &PalettePixel{
+				Index: value,
+			}
+		case ColorTypeGrayscaleAlpha:
+		case ColorTypeTruecolorAlpha:
+			switch header.BitDepth {
+			case 8:
+				pixel = &TruecolorPixel{
+					Red:   uint(data[0]),
+					Green: uint(data[1]),
+					Blue:  uint(data[2]),
+					Alpha: uint(data[3]),
+				}
+			case 16:
+				pixel = &TruecolorPixel{
+					Red:   uint(binary.BigEndian.Uint16(data)),
+					Green: uint(binary.BigEndian.Uint16(data[2:])),
+					Blue:  uint(binary.BigEndian.Uint16(data[4:])),
+					Alpha: uint(binary.BigEndian.Uint16(data[6:])),
+				}
+			}
+		}
+
+		if pixelBitSize < 8 {
+			pixelsPerByte := 8 / pixelBitSize
+			if x%pixelsPerByte == pixelsPerByte-1 {
+				data = data[1:]
+			}
+		} else {
+			data = data[pixelByteSize:]
+		}
+		pixels[x] = pixel
 	}
 
 	return pixels, nil
