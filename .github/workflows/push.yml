@@ -1,0 +1,23 @@
+name: GHA demo push
+run-name: GHA demo push run name
+on:
+  push:
+    branches:
+      - main
+jobs:
+
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Debug test
+        with:
+          go-version: '1.23.2'
+        run: echo INPUT_GO_VERSION: $INPUT_GO_VERSION
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        # `with` is a dictionary that will make it's key available as env vars prefixing with "INPUT_", eg: INPUT_GO_VERSION
+        with:
+          go-version: '1.23.2'
