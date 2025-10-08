@@ -14,7 +14,8 @@ jobs:
       - name: Debug test
         with:
           go-version: '1.23.2'
-        run: echo INPUT_GO_VERSION: $INPUT_GO_VERSION
+        run: |
+          echo INPUT_GO_VERSION: $INPUT_GO_VERSION
 
       - name: Setup Go
         uses: actions/setup-go@v4
