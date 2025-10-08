@@ -24,6 +24,12 @@ jobs:
         with:
           go-version: '1.23.2'
 
+      - name: Install SDL2 build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libsdl2-dev \
+                                  libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+
       - name: Build
         run: |
           go mod tidy
