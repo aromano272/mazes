@@ -13,12 +13,13 @@ jobs:
 
       - name: Debug test
         run: |
-          echo INPUT_GO_VERSION: $INPUT_GO_VERSION .
-        with:
+          echo GO_VERSION: $GO_VERSION, go_version: $go_version
+        env:
           go-version: '1.23.2'
 
       - name: Setup Go
         uses: actions/setup-go@v4
         # `with` is a dictionary that will make it's key available as env vars prefixing with "INPUT_", eg: INPUT_GO_VERSION
+        # the input params must be defined by the action called
         with:
           go-version: '1.23.2'
