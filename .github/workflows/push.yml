@@ -12,10 +12,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Debug test
-        with:
-          go-version: '1.23.2'
         run: |
           echo INPUT_GO_VERSION: $INPUT_GO_VERSION .
+        with:
+          go-version: '1.23.2'
 
       - name: Setup Go
         uses: actions/setup-go@v4
