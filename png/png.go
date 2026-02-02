@@ -104,7 +104,7 @@ type Scanline struct {
 	filterType FilterType
 }
 
-func (sl Scanline) unfilteringRequiresPrevScanline() bool {
+func (sl Scanline) requiresPrevScanlineToUnfilter() bool {
 	return sl.filterType >= 2
 }
 
@@ -116,12 +116,11 @@ const (
 	FilterTypePaeth
 )
 
-func DecodePng(data []byte) (*Png, error) {
-	read, err := readSig(data)
-	if err != nil {
-		return nil, err
+func extractChunks(data []byte) ([]*Chunk, error) {
+	if binary.BigEndian.Uint64(data) != FILE_SIGN {
+		return nil, fmt.Errorf("invalid PNG signature")
 	}
-	data = data[read:]
+	data = data[8:]
 
 	chunks := make([]*Chunk, 0)
 
@@ -132,6 +131,15 @@ func DecodePng(data []byte) (*Png, error) {
 		}
 		data = data[read:]
 		chunks = append(chunks, chunk)
+	}
+
+	return chunks, nil
+}
+
+func DecodePng(data []byte) (*Png, error) {
+	chunks, err := extractChunks(data)
+	if err != nil {
+		return nil, err
 	}
 
 	png := &Png{}
@@ -204,38 +212,6 @@ func uncompressIDATData(data []byte) []byte {
 	return out.Bytes()
 }
 
-func (h IHDRData) pixelNumChannels() int {
-	pixelNumChannels := 0
-	switch h.ColorType {
-	case ColorTypeGrayscale:
-		pixelNumChannels = 1
-	case ColorTypeTruecolor:
-		pixelNumChannels = 3
-	case ColorTypePalette:
-		pixelNumChannels = 1
-	case ColorTypeGrayscaleAlpha:
-		pixelNumChannels = 2
-	case ColorTypeTruecolorAlpha:
-		pixelNumChannels = 4
-	}
-	return pixelNumChannels
-}
-func (h IHDRData) pixelBitSize() int {
-	return h.pixelNumChannels() * int(h.BitDepth)
-}
-func (h IHDRData) pixelByteSize() int {
-	return h.pixelBitSize() / 8
-}
-func (h IHDRData) scanlineBitSize() int {
-	return h.pixelBitSize() * h.Width
-}
-func (h IHDRData) scanlineBitPadding() int {
-	return h.scanlineBitSize() % 8
-}
-func (h IHDRData) scanlineByteSize() int {
-	return (h.scanlineBitSize() + h.scanlineBitPadding()) / 8
-}
-
 func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 	pixels := make([][]Pixel, header.Height)
 
@@ -293,7 +269,7 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 		scanlines = append(scanlines, scanline)
 	}
 
-	results := make(chan Result, numWorkers)
+	results := make(chan ProcessScanlinesResult, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
 		start := scanlinesPerWorker * i
@@ -302,7 +278,7 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 			end = scanlineCount
 		}
 		work := scanlines[start:end]
-		go worker(
+		go processScanlines(
 			header,
 			work,
 			scanlineByteSize,
@@ -323,11 +299,8 @@ func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
 		for _, sl := range result.scanlines {
 			pixels[sl.index] = sl.pixels
 		}
-
-		if i == numWorkers-1 {
-			close(results)
-		}
 	}
+	close(results)
 
 	slices.Sort(unprocessedScanlinesIndices)
 
@@ -358,24 +331,24 @@ type ScanlineResult struct {
 	pixels []Pixel
 }
 
-type Result struct {
+type ProcessScanlinesResult struct {
 	unprocessedIndices []int
 	scanlines          []ScanlineResult
 	err                error
 }
 
-func worker(
+func processScanlines(
 	header IHDRData,
 	scanlines []*Scanline,
 	scanlineByteSize int,
 	pixelBitSize int,
 	pixelByteSize int,
-	results chan<- Result,
+	results chan<- ProcessScanlinesResult,
 ) {
-	result := Result{}
+	result := ProcessScanlinesResult{}
 	for i, sl := range scanlines {
 		var prevScanline *Scanline
-		if sl.unfilteringRequiresPrevScanline() {
+		if sl.requiresPrevScanlineToUnfilter() {
 			if sl.index == 0 {
 				prevScanline = &Scanline{data: make([]byte, scanlineByteSize)}
 			} else if i == 0 || len(scanlines[i-1].data) == 0 {
@@ -732,21 +705,17 @@ func decodePLTEChunk(ihdrData IHDRData, data []byte) (PLTEData, error) {
 	return res, nil
 }
 
-func readSig(data []byte) (int, error) {
-	sig := data[:8]
-
-	if binary.BigEndian.Uint64(sig) != FILE_SIGN {
-		return -1, fmt.Errorf("invalid PNG signature")
-	}
-
-	return 8, nil
-}
-
 func readChunk(data []byte) (*Chunk, int, error) {
+	if len(data) < 4 {
+		return nil, -1, fmt.Errorf("invalid chunk of length: %d", len(data))
+	}
 	newData := data
 	length := binary.BigEndian.Uint32(newData[:4])
 	newData = newData[4:]
 
+	if len(newData) < 4+int(length)+4 {
+		return nil, -1, fmt.Errorf("invalid chunk of length: %d, expected length of: %d", len(data), 4+4+length+4)
+	}
 	chunkType := ChunkType(newData[:4])
 	newData = newData[4:]
 
