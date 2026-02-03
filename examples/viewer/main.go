@@ -6,10 +6,9 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/png"
+	imagePng "image/png"
 	"log"
-	"mazes/path"
-	mazesPng "mazes/png"
+	"mazes/png"
 	"os"
 	"unsafe"
 )
@@ -25,7 +24,7 @@ func main() {
 		log.Fatalf("failed to read file: %v", err)
 	}
 
-	res, err := mazesPng.DecodePng(data)
+	res, err := png.DecodePng(data)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -52,11 +51,8 @@ func main() {
 	surface.FillRect(nil, sdl.MapRGB(surface.Format, 0, 0, 0)) // Black background
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	maze := make([][]bool, res.Height)
 
 	for y := 0; y < height; y++ {
-		maze[y] = make([]bool, res.Width)
-
 		for x := 0; x < width; x++ {
 			pixel := res.Pixels[y][x]
 			if res.BitDepth > 8 {
@@ -64,7 +60,7 @@ func main() {
 			}
 
 			switch p := pixel.(type) {
-			case *mazesPng.TruecolorPixel:
+			case *png.TruecolorPixel:
 				c := color.RGBA{
 					R: uint8(p.Red),
 					G: uint8(p.Green),
@@ -72,8 +68,7 @@ func main() {
 					A: uint8(p.Alpha),
 				}
 				img.Set(x, y, c)
-				maze[y][x] = p.Blue > 0
-			case *mazesPng.GreyscalePixel:
+			case *png.GreyscalePixel:
 				c := color.RGBA{
 					R: uint8(p.Value),
 					G: uint8(p.Value),
@@ -81,7 +76,7 @@ func main() {
 					A: uint8(0xFF),
 				}
 				img.Set(x, y, c)
-			case *mazesPng.PalettePixel:
+			case *png.PalettePixel:
 				truePixel := res.PlteEntries[p.Index]
 				c := color.RGBA{
 					R: uint8(truePixel.Red),
@@ -92,13 +87,6 @@ func main() {
 				img.Set(x, y, c)
 			}
 		}
-	}
-
-	endY := res.Height - 1
-	endX := res.Width - 1
-	solution := path.Astart(maze, 0, 1, endX, endY-1)
-	for _, node := range solution {
-		img.Set(node.X, node.Y, color.RGBA{R: 0xFF, G: 0x00, B: 0x00, A: 0xFF})
 	}
 
 	// Create SDL Surface
@@ -134,7 +122,7 @@ func main() {
 
 	file, _ := os.Create("output.png")
 	defer file.Close()
-	png.Encode(file, bg)
+	imagePng.Encode(file, bg)
 
 	// Handle events and keep window open
 	for {
@@ -148,14 +136,14 @@ func main() {
 	}
 }
 
-func convert16BitDepthPixelTo8Bit(pixel mazesPng.Pixel) mazesPng.Pixel {
+func convert16BitDepthPixelTo8Bit(pixel png.Pixel) png.Pixel {
 	switch p := pixel.(type) {
-	case *mazesPng.TruecolorPixel:
+	case *png.TruecolorPixel:
 		p.Red = p.Red >> 8
 		p.Green = p.Green >> 8
 		p.Blue = p.Blue >> 8
 		p.Alpha = p.Alpha >> 8
-	case *mazesPng.GreyscalePixel:
+	case *png.GreyscalePixel:
 		p.Value = p.Value >> 8
 	}
 

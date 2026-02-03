@@ -12,7 +12,7 @@ import (
 	"slices"
 )
 
-const FILE_SIGN = 0x89504E470D0A1A0A
+const file_sign = 0x89504E470D0A1A0A
 
 type Pixel interface {
 	pixel()
@@ -39,7 +39,7 @@ type TruecolorPixel struct {
 
 func (p *TruecolorPixel) pixel() {}
 
-type IHDRData struct {
+type ihdrData struct {
 	Width           int
 	Height          int
 	BitDepth        uint8
@@ -47,7 +47,7 @@ type IHDRData struct {
 	InterlaceMethod InterlaceMethod
 }
 
-type PLTEData struct {
+type plteData struct {
 	Entries []TruecolorPixel
 }
 
@@ -108,8 +108,8 @@ func DecodePng(data []byte) (*Png, error) {
 
 	png := &Png{}
 
-	var ihdrData IHDRData
-	var plteData PLTEData
+	var ihdrData ihdrData
+	var plteData plteData
 	idatData := make([]byte, 0)
 	for index, chunk := range chunks {
 		if index == 0 && chunk.chunkType != IHDR {
@@ -176,7 +176,7 @@ func uncompressIDATData(data []byte) []byte {
 	return out.Bytes()
 }
 
-func processIDATData(idatData []byte, header IHDRData) ([][]Pixel, error) {
+func processIDATData(idatData []byte, header ihdrData) ([][]Pixel, error) {
 	pixels := make([][]Pixel, header.Height)
 
 	pixelNumChannels := 0
@@ -302,7 +302,7 @@ type ProcessScanlinesResult struct {
 }
 
 func processScanlines(
-	header IHDRData,
+	header ihdrData,
 	scanlines []*Scanline,
 	scanlineByteSize int,
 	pixelBitSize int,
@@ -345,7 +345,7 @@ func processScanlines(
 }
 
 func processScanline(
-	header IHDRData,
+	header ihdrData,
 	prevScanline *Scanline,
 	scanline *Scanline,
 	scanlineByteSize int,

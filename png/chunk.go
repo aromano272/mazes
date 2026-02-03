@@ -22,7 +22,7 @@ const (
 )
 
 func extractChunks(data []byte) ([]*Chunk, error) {
-	if binary.BigEndian.Uint64(data) != FILE_SIGN {
+	if binary.BigEndian.Uint64(data) != file_sign {
 		return nil, fmt.Errorf("invalid PNG signature")
 	}
 	data = data[8:]
@@ -72,8 +72,8 @@ func readChunk(data []byte) (*Chunk, int, error) {
 	}, len(data) - len(newData), nil
 }
 
-func decodeIHDRChunk(data []byte) (IHDRData, error) {
-	res := IHDRData{}
+func decodeIHDRChunk(data []byte) (ihdrData, error) {
+	res := ihdrData{}
 	if len(data) != 13 {
 		return res, fmt.Errorf("expected IHDR chunk to be 13 bytes long, was: %d", len(data))
 	}
@@ -133,8 +133,8 @@ func decodeIHDRChunk(data []byte) (IHDRData, error) {
 	return res, nil
 }
 
-func decodePLTEChunk(ihdrData IHDRData, data []byte) (PLTEData, error) {
-	res := PLTEData{}
+func decodePLTEChunk(ihdrData ihdrData, data []byte) (plteData, error) {
+	res := plteData{}
 
 	if len(data)%3 != 0 {
 		return res, errors.New("invalid PLTE chunk data, not divisible by 3")
