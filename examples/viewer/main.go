@@ -8,8 +8,8 @@ import (
 	"image/draw"
 	imagePng "image/png"
 	"log"
-	"pngo/pngo"
 	"os"
+	"pngo/pngo"
 	"unsafe"
 )
 

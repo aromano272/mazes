@@ -435,6 +435,7 @@ func processScanline(
 			} else {
 				value = uint(data[0])
 			}
+			// TODO(aromano): there's currently a bug in the palette decoding, decode the palette.png and check the output
 			pixel = &PalettePixel{
 				Index: value,
 			}
