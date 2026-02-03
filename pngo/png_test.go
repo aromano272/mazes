@@ -1,4 +1,4 @@
-package png
+package pngo
 
 import "testing"
 
@@ -67,8 +67,8 @@ func TestDecodeChunkWithRealIHDR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected no error, but got: %v", err)
 	}
-	if chunk.chunkType != IHDR {
-		t.Fatalf("Expected chunk type IHDR, but got: %s", chunk.chunkType)
+	if chunk.chunkType != ihdr {
+		t.Fatalf("Expected chunk type ihdr, but got: %s", chunk.chunkType)
 	}
 	if read != len(REAL_IHDR_CHUNK) {
 		t.Fatalf("Expected read count to be %d, but got: %d", len(REAL_IHDR_CHUNK), read)
@@ -341,11 +341,11 @@ func TestExtractChunks(t *testing.T) {
 		if len(chunks) < 2 {
 			t.Fatalf("Expected at least 2 chunks, got %d", len(chunks))
 		}
-		if chunks[0].chunkType != IHDR {
-			t.Errorf("First chunk should be IHDR, got %s", chunks[0].chunkType)
+		if chunks[0].chunkType != ihdr {
+			t.Errorf("First chunk should be ihdr, got %s", chunks[0].chunkType)
 		}
-		if chunks[len(chunks)-1].chunkType != IEND {
-			t.Errorf("Last chunk should be IEND, got %s", chunks[len(chunks)-1].chunkType)
+		if chunks[len(chunks)-1].chunkType != iend {
+			t.Errorf("Last chunk should be iend, got %s", chunks[len(chunks)-1].chunkType)
 		}
 	})
 

@@ -1,4 +1,4 @@
-package png
+package pngo
 
 import (
 	"encoding/binary"
@@ -7,27 +7,27 @@ import (
 	"hash/crc32"
 )
 
-type Chunk struct {
-	chunkType ChunkType
+type chunk struct {
+	chunkType chunkType
 	data      []byte
 }
 
-type ChunkType string
+type chunkType string
 
 const (
-	IHDR ChunkType = "IHDR"
-	IEND ChunkType = "IEND"
-	PLTE ChunkType = "PLTE"
-	IDAT ChunkType = "IDAT"
+	ihdr chunkType = "IHDR"
+	iend chunkType = "IEND"
+	plte chunkType = "PLTE"
+	idat chunkType = "IDAT"
 )
 
-func extractChunks(data []byte) ([]*Chunk, error) {
+func extractChunks(data []byte) ([]*chunk, error) {
 	if binary.BigEndian.Uint64(data) != file_sign {
 		return nil, fmt.Errorf("invalid PNG signature")
 	}
 	data = data[8:]
 
-	chunks := make([]*Chunk, 0)
+	chunks := make([]*chunk, 0)
 
 	for len(data) > 0 {
 		chunk, read, err := readChunk(data)
@@ -41,7 +41,7 @@ func extractChunks(data []byte) ([]*Chunk, error) {
 	return chunks, nil
 }
 
-func readChunk(data []byte) (*Chunk, int, error) {
+func readChunk(data []byte) (*chunk, int, error) {
 	if len(data) < 4 {
 		return nil, -1, fmt.Errorf("invalid chunk of length: %d", len(data))
 	}
@@ -52,7 +52,7 @@ func readChunk(data []byte) (*Chunk, int, error) {
 	if len(newData) < 4+int(length)+4 {
 		return nil, -1, fmt.Errorf("invalid chunk of length: %d, expected length of: %d", len(data), 4+4+length+4)
 	}
-	chunkType := ChunkType(newData[:4])
+	chunkType := chunkType(newData[:4])
 	newData = newData[4:]
 
 	chunkData := newData[:length]
@@ -66,7 +66,7 @@ func readChunk(data []byte) (*Chunk, int, error) {
 		return nil, -1, fmt.Errorf("checksum mismatch, expected %d, got: %d", expectedChecksum, actualChecksum)
 	}
 
-	return &Chunk{
+	return &chunk{
 		chunkType: chunkType,
 		data:      chunkData,
 	}, len(data) - len(newData), nil

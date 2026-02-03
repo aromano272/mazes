@@ -8,23 +8,23 @@ import (
 	"image/draw"
 	imagePng "image/png"
 	"log"
-	"mazes/png"
+	"pngo/pngo"
 	"os"
 	"unsafe"
 )
 
 func main() {
-	filePath := "mazediag10001x10001.png"
-	//filePath := "mazediag201x201.png"
-	//filePath := "mazediag21x21.png"
-	//filePath := "palette.png"
-	//filePath := "pngtest.png"
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Fatalf("failed to read file: %v", err)
+	if len(os.Args) < 2 {
+		log.Fatal("Usage: viewer <path-to-png-file>")
 	}
 
-	res, err := png.DecodePng(data)
+	filePath := os.Args[1]
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Fatalf("failed to read file %s: %v", filePath, err)
+	}
+
+	res, err := pngo.DecodePng(data)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func main() {
 			}
 
 			switch p := pixel.(type) {
-			case *png.TruecolorPixel:
+			case *pngo.TruecolorPixel:
 				c := color.RGBA{
 					R: uint8(p.Red),
 					G: uint8(p.Green),
@@ -68,7 +68,7 @@ func main() {
 					A: uint8(p.Alpha),
 				}
 				img.Set(x, y, c)
-			case *png.GreyscalePixel:
+			case *pngo.GreyscalePixel:
 				c := color.RGBA{
 					R: uint8(p.Value),
 					G: uint8(p.Value),
@@ -76,7 +76,7 @@ func main() {
 					A: uint8(0xFF),
 				}
 				img.Set(x, y, c)
-			case *png.PalettePixel:
+			case *pngo.PalettePixel:
 				truePixel := res.PlteEntries[p.Index]
 				c := color.RGBA{
 					R: uint8(truePixel.Red),
@@ -136,14 +136,14 @@ func main() {
 	}
 }
 
-func convert16BitDepthPixelTo8Bit(pixel png.Pixel) png.Pixel {
+func convert16BitDepthPixelTo8Bit(pixel pngo.Pixel) pngo.Pixel {
 	switch p := pixel.(type) {
-	case *png.TruecolorPixel:
+	case *pngo.TruecolorPixel:
 		p.Red = p.Red >> 8
 		p.Green = p.Green >> 8
 		p.Blue = p.Blue >> 8
 		p.Alpha = p.Alpha >> 8
-	case *png.GreyscalePixel:
+	case *pngo.GreyscalePixel:
 		p.Value = p.Value >> 8
 	}
 

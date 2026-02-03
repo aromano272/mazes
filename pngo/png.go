@@ -1,4 +1,4 @@
-package png
+package pngo
 
 import (
 	"bytes"
@@ -79,25 +79,25 @@ const (
 	InterlaceMethodAdam7
 )
 
-type FilterType int
+type filterType int
 
-type Scanline struct {
+type scanline struct {
 	index      int
 	unfData    []byte
 	data       []byte
-	filterType FilterType
+	filterType filterType
 }
 
-func (sl Scanline) requiresPrevScanlineToUnfilter() bool {
+func (sl scanline) requiresPrevScanlineToUnfilter() bool {
 	return sl.filterType >= 2
 }
 
 const (
-	FilterTypeNone FilterType = iota
-	FilterTypeSub
-	FilterTypeUp
-	FilterTypeAverage
-	FilterTypePaeth
+	filterTypeNone filterType = iota
+	filterTypeSub
+	filterTypeUp
+	filterTypeAverage
+	filterTypePaeth
 )
 
 func DecodePng(data []byte) (*Png, error) {
@@ -112,11 +112,11 @@ func DecodePng(data []byte) (*Png, error) {
 	var plteData plteData
 	idatData := make([]byte, 0)
 	for index, chunk := range chunks {
-		if index == 0 && chunk.chunkType != IHDR {
+		if index == 0 && chunk.chunkType != ihdr {
 			return nil, fmt.Errorf("first chunk should be IHDR, found: %s", chunk.chunkType)
 		}
 		if index == len(chunks)-1 {
-			if chunk.chunkType != IEND {
+			if chunk.chunkType != iend {
 				return nil, fmt.Errorf("last chunk should be IEND, found: %s", chunk.chunkType)
 			}
 			if len(idatData) == 0 {
@@ -137,7 +137,7 @@ func DecodePng(data []byte) (*Png, error) {
 		}
 
 		switch chunk.chunkType {
-		case IHDR:
+		case ihdr:
 			res, err := decodeIHDRChunk(chunk.data)
 			if err != nil {
 				return nil, err
@@ -148,13 +148,13 @@ func DecodePng(data []byte) (*Png, error) {
 			png.BitDepth = res.BitDepth
 			png.InterlaceMethod = res.InterlaceMethod
 			ihdrData = res
-		case PLTE:
+		case plte:
 			res, err := decodePLTEChunk(ihdrData, chunk.data)
 			if err != nil {
 				return nil, err
 			}
 			plteData = res
-		case IDAT:
+		case idat:
 			idatData = append(idatData, chunk.data...)
 		}
 	}
@@ -212,7 +212,7 @@ func processIDATData(idatData []byte, header ihdrData) ([][]Pixel, error) {
 	numWorkers := minInt(runtime.NumCPU(), optimalNumWorkers)
 	scanlinesPerWorker := scanlineCount / numWorkers
 
-	scanlines := make([]*Scanline, 0)
+	scanlines := make([]*scanline, 0)
 	for i := 0; i < scanlineCount; i++ {
 		slLen := scanlineByteSize + 1
 		start := slLen * i
@@ -224,8 +224,8 @@ func processIDATData(idatData []byte, header ihdrData) ([][]Pixel, error) {
 			return nil, fmt.Errorf("there was idatData left in the IDAT chunks after reading all scanlines, remaining idatData: %v", idatData)
 		}
 		unpData := idatData[start:end]
-		filterType := FilterType(unpData[0])
-		scanline := &Scanline{
+		filterType := filterType(unpData[0])
+		scanline := &scanline{
 			index:      i,
 			unfData:    unpData[1:],
 			filterType: filterType,
@@ -233,7 +233,7 @@ func processIDATData(idatData []byte, header ihdrData) ([][]Pixel, error) {
 		scanlines = append(scanlines, scanline)
 	}
 
-	results := make(chan ProcessScanlinesResult, numWorkers)
+	results := make(chan processScanlinesResult, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
 		start := scanlinesPerWorker * i
@@ -290,31 +290,31 @@ func processIDATData(idatData []byte, header ihdrData) ([][]Pixel, error) {
 	return pixels, nil
 }
 
-type ScanlineResult struct {
+type scanlineResult struct {
 	index  int
 	pixels []Pixel
 }
 
-type ProcessScanlinesResult struct {
+type processScanlinesResult struct {
 	unprocessedIndices []int
-	scanlines          []ScanlineResult
+	scanlines          []scanlineResult
 	err                error
 }
 
 func processScanlines(
 	header ihdrData,
-	scanlines []*Scanline,
+	scanlines []*scanline,
 	scanlineByteSize int,
 	pixelBitSize int,
 	pixelByteSize int,
-	results chan<- ProcessScanlinesResult,
+	results chan<- processScanlinesResult,
 ) {
-	result := ProcessScanlinesResult{}
+	result := processScanlinesResult{}
 	for i, sl := range scanlines {
-		var prevScanline *Scanline
+		var prevScanline *scanline
 		if sl.requiresPrevScanlineToUnfilter() {
 			if sl.index == 0 {
-				prevScanline = &Scanline{data: make([]byte, scanlineByteSize)}
+				prevScanline = &scanline{data: make([]byte, scanlineByteSize)}
 			} else if i == 0 || len(scanlines[i-1].data) == 0 {
 				result.unprocessedIndices = append(result.unprocessedIndices, sl.index)
 				continue
@@ -338,7 +338,7 @@ func processScanlines(
 			return
 		}
 
-		scanlineResult := ScanlineResult{index: sl.index, pixels: pixels}
+		scanlineResult := scanlineResult{index: sl.index, pixels: pixels}
 		result.scanlines = append(result.scanlines, scanlineResult)
 	}
 	results <- result
@@ -346,8 +346,8 @@ func processScanlines(
 
 func processScanline(
 	header ihdrData,
-	prevScanline *Scanline,
-	scanline *Scanline,
+	prevScanline *scanline,
+	scanline *scanline,
 	scanlineByteSize int,
 	pixelBitSize int,
 	pixelByteSize int,
@@ -473,8 +473,8 @@ func processScanline(
 }
 
 func unfilterScanline(
-	previousScanline *Scanline,
-	scanline *Scanline,
+	previousScanline *scanline,
+	scanline *scanline,
 	scanlineByteSize int,
 	pixelByteSize int,
 ) error {
@@ -485,9 +485,9 @@ func unfilterScanline(
 	result := make([]byte, scanlineByteSize)
 
 	switch scanline.filterType {
-	case FilterTypeNone:
+	case filterTypeNone:
 		scanline.data = scanline.unfData
-	case FilterTypeSub:
+	case filterTypeSub:
 		for i := 0; i < scanlineByteSize; i++ {
 			subX := uint(scanline.unfData[i])
 			rawXminusBpp := uint(0)
@@ -497,7 +497,7 @@ func unfilterScanline(
 			rawX := (subX + rawXminusBpp) % 256
 			result[i] = byte(rawX)
 		}
-	case FilterTypeUp:
+	case filterTypeUp:
 		if len(previousScanline.data) == 0 {
 			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
 		}
@@ -507,7 +507,7 @@ func unfilterScanline(
 			rawX := (upX + priorX) % 256
 			result[i] = byte(rawX)
 		}
-	case FilterTypeAverage:
+	case filterTypeAverage:
 		if len(previousScanline.data) == 0 {
 			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
 		}
@@ -522,7 +522,7 @@ func unfilterScanline(
 			rawX := (avgX + uint(math.Floor(float64(rawXminusBpp+priorX)/2))) % 256
 			result[i] = byte(rawX)
 		}
-	case FilterTypePaeth:
+	case filterTypePaeth:
 		if len(previousScanline.data) == 0 {
 			return fmt.Errorf("couldn't unfilter scanline, prev scanline not unfiltered yet, curr scanline: %d", scanline.index)
 		}
